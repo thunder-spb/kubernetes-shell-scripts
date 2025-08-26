@@ -1,0 +1,170 @@
+#!/bin/bash
+
+function usage() {
+  echo "Usage: $0 [-c|--context <context>] [-l|--selector <label-selector>] [-p|--pods] [-t|--types] [-h|--help]"
+
+  echo "Options:"
+  echo "  -p, --pods                  Show node common info about allocatable and running pods."
+  echo "  -t, --types                 (Default) Show node types and provisioner."
+  echo "  -c, --context <context>     (Optional) Kubernetes context to use"
+  echo "  -l, --selector <label-selector> (Optional) Label selector to filter resources"
+  echo "  -h, --help                  Display this help message"
+}
+
+function kubectl_nodes_allocatable() {
+  # kubectl get nodes --output json ${KUBECTL_CONTEXT} ${NODE_SELECTOR} 2>/dev/null > ${__TMP_ALL_NODES}
+  # kubectl get pods --all-namespaces --output json ${KUBECTL_CONTEXT} 2>/dev/null > ${__TMP_ALL_PODS}
+  cat ${__TMP_ALL_NODES} | jq -r --slurpfile allpods ${__TMP_ALL_PODS} '
+    .items[] |
+    .metadata as $meta |
+    .status as $status |
+    {
+      name: $meta.name,
+      instance_type: (
+        if $meta.labels."node.kubernetes.io/instance-type" != null then
+          $meta.labels."node.kubernetes.io/instance-type"
+        elif $meta.labels."beta.kubernetes.io/instance-type" != null then
+          $meta.labels."beta.kubernetes.io/instance-type"
+        else
+          "unknown"
+        end
+      ),
+      provisioner: (
+        if $meta.labels."karpenter.sh/nodepool" != null then
+          "Karpenter"
+        else
+          "EKS NodeGroup"
+        end
+      ),
+      allocatable: $status.allocatable.pods,
+      running: (
+        $allpods[0].items
+        | map(select(.spec.nodeName == $meta.name))
+        | length
+      )
+    }
+    | "\(.name)§\(.instance_type)§\(.provisioner)§\(.allocatable)§\(.running)"
+  ' | sed '1i\
+NAME§INSTANCE_TYPE§PROVISIONER§TOTAL§RUNNING\
+----§-------------§-----------§-----§-------\
+' | column -t -s '§'
+}
+
+function kubectl_nodes_types() {
+  kubectl get nodes --output json ${KUBECTL_CONTEXT} ${NODE_SELECTOR} | jq -r "$(cat << 'EOF'
+    # Fix timestamp
+    def has_z: if . == null or length == 0 then false else .[-1:] == "Z" end;
+    def norm_time: if has_z then . else . + "Z" end;
+    # Function to display age in human readable format
+    def age_str:
+      (norm_time | fromdate) as $ts
+      | (now - $ts) / 60 | floor as $m
+      | if $m < 60 then "\($m)m"
+        elif $m < 1440 then "\($m / 60 | floor)h\($m % 60)m"
+        else "\($m / 1440 | floor)d\($m % 1440 / 60 | floor)h"
+        end;
+
+    .items[] |
+    .metadata as $meta |
+    .status as $status |
+
+    # Collect data
+    {
+      name: $meta.name,
+      ip: (
+        [ $status.addresses[] | select(.type == "InternalIP") ] |
+        if length > 0 then .[0].address else "" end
+      ),
+      version: $status.nodeInfo.kubeletVersion,
+      instance_type: (
+        if $meta.labels."node.kubernetes.io/instance-type" != null then
+          $meta.labels."node.kubernetes.io/instance-type"
+        elif $meta.labels."beta.kubernetes.io/instance-type" != null then
+          $meta.labels."beta.kubernetes.io/instance-type"
+        else
+          "unknown"
+        end
+      ),
+      provisioner: (
+        if $meta.labels."karpenter.sh/nodepool" != null then
+          "Karpenter"
+        else
+          "EKS NodeGroup"
+        end
+      ),
+      # Get node status
+      ready: (
+        [ $status.conditions[] | select(.type == "Ready") ] |
+        if length > 0 then .[0].status else "False" end
+      ),
+      # Calculate age
+      age: ($meta.creationTimestamp | age_str)
+    } |
+
+    # Properly format node status
+    .status = (if .ready == "True" then "Ready" else "NotReady" end) |
+
+    # Format string with separator §
+    "\(.name)§\(.status)§\(.age)§\(.ip)§\(.version)§\(.provisioner)§\(.instance_type)"
+EOF
+  )" | sed '1i\
+NAME§STATUS§AGE§IP§VERSION§PROVISIONER§INSTANCE_TYPE\
+----§------§-----§--§-------§-----------§-------------\
+' | sed 's/Ready/  🟢/g' | sed 's/NotReady/  🔴/g' | column -t -s '§'
+}
+
+ACTION=${1:-types}
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -p|--pods)
+      ACTION=pods
+      shift
+      ;;
+    -t|--types)
+      ACTION=types
+      shift
+      ;;
+    -c|--context)
+      KUBECTL_CONTEXT="$2"
+      shift
+      shift
+      ;;
+    -l|--selector)
+      NODE_SELECTOR="$2"
+      shift
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $ACTION"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+[[ -n "$KUBECTL_CONTEXT" ]] && KUBECTL_CONTEXT="--context ${KUBECTL_CONTEXT}"
+[[ -n "$NODE_SELECTOR" ]] && NODE_SELECTOR="--selector=${NODE_SELECTOR}"
+
+__TMP_ALL_NODES=$(mktemp)
+__TMP_ALL_PODS=$(mktemp)
+cleanup() {
+  rm "${__TMP_ALL_NODES}" "${__TMP_ALL_PODS}"
+}
+trap cleanup EXIT
+
+kubectl get nodes --output json ${KUBECTL_CONTEXT} ${NODE_SELECTOR} 2>/dev/null > ${__TMP_ALL_NODES}
+
+case $ACTION in
+  pods)
+    kubectl get pods --all-namespaces --output json ${KUBECTL_CONTEXT} 2>/dev/null > ${__TMP_ALL_PODS}
+    kubectl_nodes_allocatable
+    ;;
+  types)
+    kubectl_nodes_types
+    ;;
+esac

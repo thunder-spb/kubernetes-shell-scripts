@@ -1,0 +1,118 @@
+#!/bin/bash
+
+# Helper function to display usage
+usage() {
+    echo "Usage: $0 <resource-type> [resource-name] [-c|--context <context>] [-n|--namespace <namespace>] [-l|--selector <label-selector>] [-i|--interactive] [-o|--output <format>] [-h|--help] [-d|--debug]"
+    echo ""
+    echo "Options:"
+    echo "  resource-type               (Required) Type of the Kubernetes resource (e.g., pods, services)"
+    echo "  resource-name               (Optional) Name of the Kubernetes resource. If not provided, lists all resources of the specified type"
+    echo "  -c, --context <context>     (Optional) Kubernetes context to use"
+    echo "  -n, --namespace <namespace> (Optional) Namespace where the resource resides"
+    echo "  -l, --selector <label-selector> (Optional) Label selector to filter resources"
+    echo "  -i, --interactive           (Optional) Enable interactive mode using fzf (WIP)"
+    echo "  -o, --output <format>       (Optional) Output format, either 'yaml' or 'json'"
+    echo "  -h, --help                  Display this help message"
+    echo "  -d, --debug                 Enable debug mode"
+}
+
+POSITIONAL_ARGS=()
+
+# Parse arguments
+RESOURCE_TYPE="all"
+RESOURCE_NAME=""
+CONTEXT=""
+NAMESPACE=""
+LABEL_SELECTOR=""
+USE_FZF=false
+OUTPUT_FORMAT="yaml"
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -c|--context)
+          CONTEXT="$2"
+          shift
+          shift
+          ;;
+        -n|--namespace)
+          NAMESPACE="$2"
+          shift
+          shift
+          ;;
+        -l|--selector)
+          LABEL_SELECTOR="$2"
+          shift
+          shift
+          ;;
+        -h|--help)
+          usage
+          shift
+          exit 0
+          ;;
+        -i|--interactive)
+          USE_FZF=true
+          shift
+          ;;
+        -o|--output)
+          OUTPUT_FORMAT="$2"
+          shift
+          shift
+          ;;
+        -d|--debug)
+          set -x
+          shift
+          ;;
+        -*)
+          echo "Unknown option $1"
+          usage
+          exit 1
+          ;;
+        *)
+          POSITIONAL_ARGS+=("$1") # save positional arg
+          shift # past argument
+          ;;
+    esac
+done
+
+set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+
+# Validate output format
+if [[ "$OUTPUT_FORMAT" != "yaml" && "$OUTPUT_FORMAT" != "json" ]]; then
+  echo "Error: Output format must be 'yaml' or 'json'"
+  exit 1
+fi
+
+RESOURCE_TYPE=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+RESOURCE_NAME=$(echo "$2" | tr '[:upper:]' '[:lower:]')
+
+if [[ -z "$RESOURCE_TYPE" ]]; then
+  usage
+fi
+
+# Build kubectl command with optional arguments
+KUBECTL_CMD="kubectl"
+[[ -n "$CONTEXT" ]] && KUBECTL_CMD="$KUBECTL_CMD --context=$CONTEXT"
+[[ -n "$NAMESPACE" ]] && KUBECTL_CMD="$KUBECTL_CMD --namespace=$NAMESPACE"
+[[ -n "$LABEL_SELECTOR" ]] && KUBECTL_CMD="$KUBECTL_CMD --selector=$LABEL_SELECTOR"
+
+if [[ -z "$RESOURCE_NAME" ]]; then
+  $KUBECTL_CMD get ${RESOURCE_TYPE}
+  exit 0
+fi
+
+# Fetch the resource and decode its data
+RESOURCE_JSON=$($KUBECTL_CMD get ${RESOURCE_TYPE} ${RESOURCE_NAME} -o json 2>/dev/null)
+
+# Check if the resource exists
+if [[ $? -ne 0 ]]; then
+    echo "Error: ${RESOURCE_TYPE} ${RESOURCE_NAME} not found."
+    exit 1
+fi
+
+# Output the result as JSON or YAML
+if [[ $OUTPUT_FORMAT == "json" ]]; then
+    echo "$RESOURCE_JSON" | jq -r
+else
+    echo "$RESOURCE_JSON" | yq eval -P
+fi
+
