@@ -129,7 +129,41 @@ Examples:
 ```bash
 # Show node types/provisioners with status
 ./kubectl-fancy-nodes --types
+```
+Example output:
+```bash
+NAME                                        STATUS  AGE    IP            VERSION              PROVISIONER    INSTANCE_TYPE
+----                                        ------  -----  --            -------              -----------    -------------
+ip-10-83-248-126.eu-west-2.compute.internal    🟢    4d18h  10.83.248.126  v1.33.0-eks-802817d  Karpenter      c6a.xlarge
+ip-10-83-248-234.eu-west-2.compute.internal    🟢    4d18h  10.83.248.234  v1.33.0-eks-802817d  Karpenter      c6a.xlarge
+ip-10-83-248-27.eu-west-2.compute.internal     🟢    1d22h  10.83.248.27   v1.33.0-eks-802817d  EKS NodeGroup  c5.2xlarge
+ip-10-83-248-4.eu-west-2.compute.internal      🟢    4d18h  10.83.248.4    v1.33.0-eks-802817d  Karpenter      c6a.xlarge
+ip-10-83-248-72.eu-west-2.compute.internal     🟢    4d18h  10.83.248.72   v1.33.0-eks-802817d  Karpenter      m6a.xlarge
+ip-10-83-248-97.eu-west-2.compute.internal     🟢    4d18h  10.83.248.97   v1.33.0-eks-802817d  Karpenter      c6a.xlarge
+ip-10-83-249-137.eu-west-2.compute.internal    🟢    4d18h  10.83.249.137  v1.33.0-eks-802817d  Karpenter      c6a.xlarge
+ip-10-83-249-185.eu-west-2.compute.internal    🟢    1d22h  10.83.249.185  v1.33.0-eks-802817d  EKS NodeGroup  c5.2xlarge
+ip-10-83-249-212.eu-west-2.compute.internal    🟢    1d22h  10.83.249.212  v1.33.0-eks-802817d  EKS NodeGroup  c5.2xlarge
+ip-10-83-249-56.eu-west-2.compute.internal     🟢    4d18h  10.83.249.56   v1.33.0-eks-802817d  Karpenter      c6a.xlarge
+```
 
+```bash
 # Show allocatable vs running pods per node
 ./kubectl-fancy-nodes --pods
+```
+
+Example output:
+```bash
+NAME                                        INSTANCE_TYPE  PROVISIONER    TOTAL  RUNNING
+----                                        -------------  -----------    -----  -------
+ip-10-83-248-126.eu-west-2.compute.internal  c6a.xlarge     Karpenter      58     19
+ip-10-83-248-234.eu-west-2.compute.internal  c6a.xlarge     Karpenter      58     18
+ip-10-83-248-27.eu-west-2.compute.internal   c5.2xlarge     EKS NodeGroup  58     7
+ip-10-83-248-4.eu-west-2.compute.internal    c6a.xlarge     Karpenter      58     30
+ip-10-83-248-72.eu-west-2.compute.internal   m6a.xlarge     Karpenter      58     21
+ip-10-83-248-97.eu-west-2.compute.internal   c6a.xlarge     Karpenter      58     21
+ip-10-83-249-137.eu-west-2.compute.internal  c6a.xlarge     Karpenter      58     17
+ip-10-83-249-185.eu-west-2.compute.internal  c5.2xlarge     EKS NodeGroup  58     6
+ip-10-83-249-212.eu-west-2.compute.internal  c5.2xlarge     EKS NodeGroup  58     11
+ip-10-83-249-56.eu-west-2.compute.internal   c6a.xlarge     Karpenter      58     22
+ip-10-83-249-56.eu-west-2.compute.internal   c6a.xlarge     Karpenter      58     22
 ```
