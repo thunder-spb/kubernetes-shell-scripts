@@ -43,10 +43,10 @@ function kubectl_nodes_allocatable() {
         | length
       )
     }
-    | "\(.name)§\(.instance_type)§\(.provisioner)§\(.allocatable)§\(.running)"
+    | "\(.name)§\(.provisioner)§\(.instance_type)§\(.allocatable)§\(.running)"
   ' | sed '1i\
-NAME§INSTANCE_TYPE§PROVISIONER§TOTAL§RUNNING\
-----§-------------§-----------§-----§-------\
+NAME§PROVISIONER§INSTANCE_TYPE§TOTAL§RUNNING\
+----§-----------§-------------§-----§-------\
 ' | column -t -s '§'
 }
 
@@ -88,8 +88,10 @@ function kubectl_nodes_types() {
       provisioner: (
         if $meta.labels."karpenter.sh/nodepool" != null then
           "Karpenter"
-        else
+        elif $meta.labels."eks.amazonaws.com/nodegroup" != null then
           "EKS NodeGroup"
+        else
+          "Unknown"
         end
       ),
       # Get node status
