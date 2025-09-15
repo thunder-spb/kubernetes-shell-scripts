@@ -1,10 +1,11 @@
 #!/bin/bash
 
 function usage() {
-  echo "Usage: $0 [-c|--context <context>] [-l|--selector <label-selector>] [-p|--pods] [-t|--types] [-h|--help]"
+  echo "Usage: $0 [-c|--context <context>] [-l|--selector <label-selector>] [-p|--pods] [-r|--resources] [-t|--types] [-h|--help]"
 
   echo "Options:"
   echo "  -p, --pods                  Show node common info about allocatable and running pods."
+  echo "  -r, --resources             Show per-node CPU/memory requests and limits (aggregated from pods)."
   echo "  -t, --types                 (Default) Show node types and provisioner."
   echo "  -c, --context <context>     (Optional) Kubernetes context to use"
   echo "  -l, --selector <label-selector> (Optional) Label selector to filter resources"
@@ -50,6 +51,94 @@ NAME§PROVISIONER§INSTANCE_TYPE§TOTAL§RUNNING\
 ' | column -t -s '§'
 }
 
+function kubectl_nodes_resources() {
+  cat ${__TMP_ALL_NODES} | jq -r --slurpfile allpods ${__TMP_ALL_PODS} '
+    # Helpers to parse resource quantities
+    def cpu_milli:
+      if . == null then 0
+      elif (type == "number") then (. * 1000)
+      else
+        (.|tostring) as $s |
+        if ($s | endswith("m")) then ($s | sub("m$"; "") | tonumber)
+        else (($s | tonumber) * 1000)
+        end
+      end;
+
+    def mem_bytes:
+      if . == null then 0
+      else
+        (.|tostring | ascii_upcase) as $s |
+        if ($s|test("KI$")) then ($s|sub("KI$";"")|tonumber) * 1024
+        elif ($s|test("MI$")) then ($s|sub("MI$";"")|tonumber) * 1024 * 1024
+        elif ($s|test("GI$")) then ($s|sub("GI$";"")|tonumber) * 1024 * 1024 * 1024
+        elif ($s|test("TI$")) then ($s|sub("TI$";"")|tonumber) * 1024 * 1024 * 1024 * 1024
+        elif ($s|test("PI$")) then ($s|sub("PI$";"")|tonumber) * 1024 * 1024 * 1024 * 1024 * 1024
+        elif ($s|test("EI$")) then ($s|sub("EI$";"")|tonumber) * 1024 * 1024 * 1024 * 1024 * 1024 * 1024
+        elif ($s|test("K$")) then ($s|sub("K$";"")|tonumber) * 1000
+        elif ($s|test("M$")) then ($s|sub("M$";"")|tonumber) * 1000 * 1000
+        elif ($s|test("G$")) then ($s|sub("G$";"")|tonumber) * 1000 * 1000 * 1000
+        elif ($s|test("T$")) then ($s|sub("T$";"")|tonumber) * 1000 * 1000 * 1000 * 1000
+        elif ($s|test("P$")) then ($s|sub("P$";"")|tonumber) * 1000 * 1000 * 1000 * 1000 * 1000
+        elif ($s|test("E$")) then ($s|sub("E$";"")|tonumber) * 1000 * 1000 * 1000 * 1000 * 1000 * 1000
+        else (try ($s | tonumber) catch 0)
+        end
+      end;
+
+    def gi_1dec: ((. / (1024*1024*1024) * 10) | floor) / 10;
+    def pct_1dec($num; $den): if ($den == 0) then 0 else (((($num * 1000) / $den) | floor) / 10) end;
+
+    .items[] |
+    .metadata as $meta |
+    .status as $status |
+    ($allpods[0].items | map(select(.spec.nodeName == $meta.name))) as $pods |
+
+    def pod_sum_cpu_requests:
+      ([ .spec.initContainers[]?, .spec.containers[]? ] | map(.resources.requests.cpu) | map(select(. != null)) | map(cpu_milli) | add) // 0;
+    def pod_sum_cpu_limits:
+      ([ .spec.initContainers[]?, .spec.containers[]? ] | map(.resources.limits.cpu) | map(select(. != null)) | map(cpu_milli) | add) // 0;
+    def pod_sum_mem_requests:
+      ([ .spec.initContainers[]?, .spec.containers[]? ] | map(.resources.requests.memory) | map(select(. != null)) | map(mem_bytes) | add) // 0;
+    def pod_sum_mem_limits:
+      ([ .spec.initContainers[]?, .spec.containers[]? ] | map(.resources.limits.memory) | map(select(. != null)) | map(mem_bytes) | add) // 0;
+
+    {
+      name: $meta.name,
+      instance_type: (
+        if $meta.labels."node.kubernetes.io/instance-type" != null then
+          $meta.labels."node.kubernetes.io/instance-type"
+        elif $meta.labels."beta.kubernetes.io/instance-type" != null then
+          $meta.labels."beta.kubernetes.io/instance-type"
+        else
+          "unknown"
+        end
+      ),
+      provisioner: (
+        if $meta.labels."karpenter.sh/nodepool" != null then
+          "Karpenter"
+        else
+          "EKS NodeGroup"
+        end
+      ),
+      alloc_cpu_m: ($status.allocatable.cpu | cpu_milli),
+      alloc_mem_b: ($status.allocatable.memory | mem_bytes),
+      req_cpu_m: ($pods | map(pod_sum_cpu_requests) | add // 0),
+      lim_cpu_m: ($pods | map(pod_sum_cpu_limits) | add // 0),
+      req_mem_b: ($pods | map(pod_sum_mem_requests) | add // 0),
+      lim_mem_b: ($pods | map(pod_sum_mem_limits) | add // 0),
+      req_mem_gi: ($pods | map(pod_sum_mem_requests) | add // 0 | gi_1dec),
+      lim_mem_gi: ($pods | map(pod_sum_mem_limits) | add // 0 | gi_1dec),
+      req_cpu_pct: (pct_1dec(( $pods | map(pod_sum_cpu_requests) | add // 0 ); (.status.allocatable.cpu | cpu_milli))),
+      lim_cpu_pct: (pct_1dec(( $pods | map(pod_sum_cpu_limits) | add // 0 ); (.status.allocatable.cpu | cpu_milli))),
+      req_mem_pct: (pct_1dec(( $pods | map(pod_sum_mem_requests) | add // 0 ); (.status.allocatable.memory | mem_bytes))),
+      lim_mem_pct: (pct_1dec(( $pods | map(pod_sum_mem_limits) | add // 0 ); (.status.allocatable.memory | mem_bytes)))
+    }
+    | "\(.name)§\(.provisioner)§\(.instance_type)§\(.req_cpu_m)§\(.lim_cpu_m)§\(.req_mem_gi)§\(.lim_mem_gi)§\(.req_cpu_pct)%§\(.lim_cpu_pct)%§\(.req_mem_pct)%§\(.lim_mem_pct)%"
+  ' | sed '1i\
+NAME§PROVISIONER§INSTANCE_TYPE§REQ_CPU(m)§LIM_CPU(m)§REQ_MEM(Gi)§LIM_MEM(Gi)§REQ_CPU(%)§LIM_CPU(%)§REQ_MEM(%)§LIM_MEM(%)\
+----§-----------§-------------§----------§----------§-----------§-----------§----------§----------§----------§----------\
+' | column -t -s '§'
+}
+
 function kubectl_nodes_types() {
   kubectl get nodes --output json ${KUBECTL_CONTEXT} ${NODE_SELECTOR} | jq -r "$(cat << 'EOF'
     # Fix timestamp
@@ -85,6 +174,13 @@ function kubectl_nodes_types() {
           "unknown"
         end
       ),
+      az: (
+        if $meta.labels."topology.kubernetes.io/zone" != null then
+          $meta.labels."topology.kubernetes.io/zone"
+        else
+          "unknown"
+        end
+      ),
       provisioner: (
         if $meta.labels."karpenter.sh/nodepool" != null then
           "Karpenter"
@@ -107,12 +203,12 @@ function kubectl_nodes_types() {
     .status = (if .ready == "True" then "Ready" else "NotReady" end) |
 
     # Format string with separator §
-    "\(.name)§\(.status)§\(.age)§\(.ip)§\(.version)§\(.provisioner)§\(.instance_type)"
+    "\(.name)§\(.status)§\(.age)§\(.ip)§\(.version)§\(.provisioner)§\(.instance_type)§\(.az)"
 EOF
   )" | sed '1i\
-NAME§STATUS§AGE§IP§VERSION§PROVISIONER§INSTANCE_TYPE\
-----§------§-----§--§-------§-----------§-------------\
-' | sed 's/Ready/  🟢/g' | sed 's/NotReady/  🔴/g' | column -t -s '§'
+NAME§STATUS§AGE§IP§VERSION§PROVISIONER§INSTANCE_TYPE§AZ\
+----§------§-----§--§-------§-----------§------------§--\
+' | sed 's/NotReady/  🔴/g' | sed 's/Ready/  🟢/g' | column -t -s '§'
 }
 
 ACTION=${1:-types}
@@ -121,6 +217,10 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     -p|--pods)
       ACTION=pods
+      shift
+      ;;
+    -r|--resources)
+      ACTION=resources
       shift
       ;;
     -t|--types)
@@ -165,6 +265,10 @@ case $ACTION in
   pods)
     kubectl get pods --all-namespaces --output json ${KUBECTL_CONTEXT} 2>/dev/null > ${__TMP_ALL_PODS}
     kubectl_nodes_allocatable
+    ;;
+  resources)
+    kubectl get pods --all-namespaces --output json ${KUBECTL_CONTEXT} 2>/dev/null > ${__TMP_ALL_PODS}
+    kubectl_nodes_resources
     ;;
   types)
     kubectl_nodes_types
