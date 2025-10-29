@@ -33,9 +33,20 @@ function kubectl_nodes_allocatable() {
       provisioner: (
         if $meta.labels."karpenter.sh/nodepool" != null then
           "Karpenter"
+        elif $meta.labels."eks.amazonaws.com/nodegroup" != null then
+          "EKS MNG"
         else
-          "EKS NodeGroup"
+          "Unknown"
         end
+      ),
+      groupname: (
+        (if $meta.labels."eks.amazonaws.com/nodegroup" != null then
+          $meta.labels."eks.amazonaws.com/nodegroup"
+        elif $meta.labels."karpenter.sh/nodepool" != null then
+          $meta.labels."karpenter.sh/nodepool"
+        else
+          "Unknown"
+        end) | if length > 20 then .[0:20] + "..." else . end
       ),
       allocatable: $status.allocatable.pods,
       running: (
@@ -44,10 +55,10 @@ function kubectl_nodes_allocatable() {
         | length
       )
     }
-    | "\(.name)§\(.provisioner)§\(.instance_type)§\(.allocatable)§\(.running)"
+    | "\(.name)§\(.provisioner)/\(.groupname)§\(.instance_type)§\(.allocatable)§\(.running)"
   ' | sed '1i\
-NAME§PROVISIONER§INSTANCE_TYPE§TOTAL§RUNNING\
-----§-----------§-------------§-----§-------\
+NAME§PROVISIONER/GROUPNAME§INSTANCE_TYPE§TOTAL§RUNNING\
+----§---------------------§-------------§-----§-------\
 ' | column -t -s '§'
 }
 
@@ -115,9 +126,20 @@ function kubectl_nodes_resources() {
       provisioner: (
         if $meta.labels."karpenter.sh/nodepool" != null then
           "Karpenter"
+        elif $meta.labels."eks.amazonaws.com/nodegroup" != null then
+          "EKS MNG"
         else
-          "EKS NodeGroup"
+          "Unknown"
         end
+      ),
+      groupname: (
+        (if $meta.labels."eks.amazonaws.com/nodegroup" != null then
+          $meta.labels."eks.amazonaws.com/nodegroup"
+        elif $meta.labels."karpenter.sh/nodepool" != null then
+          $meta.labels."karpenter.sh/nodepool"
+        else
+          "Unknown"
+        end) | if length > 20 then .[0:20] + "..." else . end
       ),
       alloc_cpu_m: ($status.allocatable.cpu | cpu_milli),
       alloc_mem_b: ($status.allocatable.memory | mem_bytes),
@@ -132,10 +154,10 @@ function kubectl_nodes_resources() {
       req_mem_pct: (pct_1dec(( $pods | map(pod_sum_mem_requests) | add // 0 ); (.status.allocatable.memory | mem_bytes))),
       lim_mem_pct: (pct_1dec(( $pods | map(pod_sum_mem_limits) | add // 0 ); (.status.allocatable.memory | mem_bytes)))
     }
-    | "\(.name)§\(.provisioner)§\(.instance_type)§\(.req_cpu_m)§\(.lim_cpu_m)§\(.req_mem_gi)§\(.lim_mem_gi)§\(.req_cpu_pct)%§\(.lim_cpu_pct)%§\(.req_mem_pct)%§\(.lim_mem_pct)%"
+    | "\(.name)§\(.provisioner)/\(.groupname)§\(.instance_type)§\(.req_cpu_m)§\(.lim_cpu_m)§\(.req_mem_gi)§\(.lim_mem_gi)§\(.req_cpu_pct)%§\(.lim_cpu_pct)%§\(.req_mem_pct)%§\(.lim_mem_pct)%"
   ' | sed '1i\
-NAME§PROVISIONER§INSTANCE_TYPE§REQ_CPU(m)§LIM_CPU(m)§REQ_MEM(Gi)§LIM_MEM(Gi)§REQ_CPU(%)§LIM_CPU(%)§REQ_MEM(%)§LIM_MEM(%)\
-----§-----------§-------------§----------§----------§-----------§-----------§----------§----------§----------§----------\
+NAME§PROVISIONER/GROUPNAME§INSTANCE_TYPE§REQ_CPU(m)§LIM_CPU(m)§REQ_MEM(Gi)§LIM_MEM(Gi)§REQ_CPU(%)§LIM_CPU(%)§REQ_MEM(%)§LIM_MEM(%)\
+----§---------------------§-------------§----------§----------§-----------§-----------§----------§----------§----------§----------\
 ' | column -t -s '§'
 }
 
@@ -185,10 +207,19 @@ function kubectl_nodes_types() {
         if $meta.labels."karpenter.sh/nodepool" != null then
           "Karpenter"
         elif $meta.labels."eks.amazonaws.com/nodegroup" != null then
-          "EKS NodeGroup"
+          "EKS MNG"
         else
           "Unknown"
         end
+      ),
+      groupname: (
+        (if $meta.labels."eks.amazonaws.com/nodegroup" != null then
+          $meta.labels."eks.amazonaws.com/nodegroup"
+        elif $meta.labels."karpenter.sh/nodepool" != null then
+          $meta.labels."karpenter.sh/nodepool"
+        else
+          "Unknown"
+        end) | if length > 20 then .[0:20] + "..." else . end
       ),
       # Get node status
       ready: (
@@ -203,11 +234,11 @@ function kubectl_nodes_types() {
     .status = (if .ready == "True" then "Ready" else "NotReady" end) |
 
     # Format string with separator §
-    "\(.name)§\(.status)§\(.age)§\(.ip)§\(.version)§\(.provisioner)§\(.instance_type)§\(.az)"
+    "\(.name)§\(.status)§\(.age)§\(.ip)§\(.version)§\(.provisioner)/\(.groupname)§\(.instance_type)§\(.az)"
 EOF
   )" | sed '1i\
-NAME§STATUS§AGE§IP§VERSION§PROVISIONER§INSTANCE_TYPE§AZ\
-----§------§-----§--§-------§-----------§------------§--\
+NAME§STATUS§AGE§IP§VERSION§PROVISIONER/GROUPNAME§INSTANCE_TYPE§AZ\
+----§------§---§--§-------§---------------------§-------------§--\
 ' | sed 's/NotReady/  🔴/g' | sed 's/Ready/  🟢/g' | column -t -s '§'
 }
 
@@ -242,7 +273,7 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "Unknown argument: $ACTION"
+      echo "Unknown argument: $1"
       usage
       exit 1
       ;;
