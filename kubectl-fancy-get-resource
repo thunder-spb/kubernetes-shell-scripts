@@ -2,18 +2,22 @@
 
 # Helper function to display usage
 usage() {
-    echo "Usage: $0 <resource-type> [resource-name] [-c|--context <context>] [-n|--namespace <namespace>] [-l|--selector <label-selector>] [-i|--interactive] [-o|--output <format>] [-h|--help] [-d|--debug]"
+    echo "Usage: $0 <resource-type> [resource-name] [-c|--context <context>] [-n|--namespace <namespace>] [-A|--all-namespaces] [-l|--selector <label-selector>] [--secret-data-key <data-key>] [--secret-data-only] [-i|--interactive] [-o|--output <format>] [-h|--help] [-d|--debug]"
     echo ""
     echo "Options:"
-    echo "  resource-type               (Required) Type of the Kubernetes resource (e.g., pods, services)"
-    echo "  resource-name               (Optional) Name of the Kubernetes resource. If not provided, lists all resources of the specified type"
-    echo "  -c, --context <context>     (Optional) Kubernetes context to use"
-    echo "  -n, --namespace <namespace> (Optional) Namespace where the resource resides"
+    echo "  resource-type                   (Required) Type of the Kubernetes resource (e.g., pods, services)"
+    echo "  resource-name                   (Optional) Name of the Kubernetes resource. If not provided, lists all resources of the specified type"
+    echo "  -c, --context <context>         (Optional) Kubernetes context to use"
+    echo "  -A, --all-namespaces            (Optional) List resources in all namespaces"
+    echo "  -n, --namespace <namespace>     (Optional) Namespace where the resource resides. Ignored if --all-namespaces is used"
     echo "  -l, --selector <label-selector> (Optional) Label selector to filter resources"
-    echo "  -i, --interactive           (Optional) Enable interactive mode using fzf (WIP)"
-    echo "  -o, --output <format>       (Optional) Output format, either 'yaml' or 'json'"
-    echo "  -h, --help                  Display this help message"
-    echo "  -d, --debug                 Enable debug mode"
+    echo "  --secret-no-decode              (Optional) Skip decoding secret data. Default is to decode."
+    echo "  --secret-data-key <data-key>    (Optional) Specific key in the secret's data to decode (only with secrets)"
+    echo "  --secret-data-only              (Optional) Output only the decoded data section of the secret (only with secrets)"
+    echo "  -i, --interactive               (Optional) Enable interactive mode using fzf (WIP)"
+    echo "  -o, --output <format>           (Optional) Output format, either 'yaml' or 'json'"
+    echo "  -h, --help                      Display this help message"
+    echo "  -d, --debug                     Enable debug mode"
 }
 
 POSITIONAL_ARGS=()
@@ -26,6 +30,10 @@ NAMESPACE=""
 LABEL_SELECTOR=""
 USE_FZF=false
 OUTPUT_FORMAT="yaml"
+ALL_NAMESPACES=false
+SECRET_NO_DECODE=false
+SECRET_DATA_KEY=
+SECRET_DATA_ONLY=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -37,6 +45,10 @@ while [[ $# -gt 0 ]]; do
         -n|--namespace)
           NAMESPACE="$2"
           shift
+          shift
+          ;;
+        -A|--all-namespaces)
+          ALL_NAMESPACES=true
           shift
           ;;
         -l|--selector)
@@ -62,6 +74,19 @@ while [[ $# -gt 0 ]]; do
           set -x
           shift
           ;;
+        --no-decode-secret)
+          SECRET_NO_DECODE=true
+          shift
+          ;;
+        --secret-data-key)
+          SECRET_DATA_KEY=$2
+          shift
+          shift
+          ;;
+        --secret-data-only)
+          SECRET_DATA_ONLY=true
+          shift
+          ;;
         -*)
           echo "Unknown option $1"
           usage
@@ -85,28 +110,63 @@ fi
 RESOURCE_TYPE=$(echo "$1" | tr '[:upper:]' '[:lower:]')
 RESOURCE_NAME=$(echo "$2" | tr '[:upper:]' '[:lower:]')
 
+if echo "$RESOURCE_TYPE" | grep '/'; then
+  RESOURCE_TYPE=$(echo "$RESOURCE_TYPE" | cut -d '/' -f 1)
+  RESOURCE_NAME=$(echo "$RESOURCE_TYPE" | cut -d '/' -f 2)
+fi
+
 if [[ -z "$RESOURCE_TYPE" ]]; then
   usage
 fi
 
 # Build kubectl command with optional arguments
 KUBECTL_CMD="kubectl"
-[[ -n "$CONTEXT" ]] && KUBECTL_CMD="$KUBECTL_CMD --context=$CONTEXT"
-[[ -n "$NAMESPACE" ]] && KUBECTL_CMD="$KUBECTL_CMD --namespace=$NAMESPACE"
-[[ -n "$LABEL_SELECTOR" ]] && KUBECTL_CMD="$KUBECTL_CMD --selector=$LABEL_SELECTOR"
+KUBECTL_CMD_PARAMS=""
+[[ -n "$NAMESPACE" && "$ALL_NAMESPACES" == true ]] && echo "Error: Namespace cannot be used with --all-namespaces" && exit 1
+
+[[ -n "$CONTEXT" ]] && KUBECTL_CMD_PARAMS="$KUBECTL_CMD_PARAMS --context=$CONTEXT"
+[[ "$ALL_NAMESPACES" == true ]] && KUBECTL_CMD_PARAMS="$KUBECTL_CMD_PARAMS --all-namespaces"
+[[ -n "$NAMESPACE" ]] && KUBECTL_CMD_PARAMS="$KUBECTL_CMD_PARAMS --namespace=$NAMESPACE"
+[[ -n "$LABEL_SELECTOR" ]] && KUBECTL_CMD_PARAMS="$KUBECTL_CMD_PARAMS --selector=$LABEL_SELECTOR"
 
 if [[ -z "$RESOURCE_NAME" ]]; then
-  $KUBECTL_CMD get ${RESOURCE_TYPE}
+  $KUBECTL_CMD get ${RESOURCE_TYPE} ${KUBECTL_CMD_PARAMS}
   exit 0
 fi
 
 # Fetch the resource and decode its data
-RESOURCE_JSON=$($KUBECTL_CMD get ${RESOURCE_TYPE} ${RESOURCE_NAME} -o json 2>/dev/null)
+RESOURCE_JSON=$($KUBECTL_CMD get ${RESOURCE_TYPE} ${RESOURCE_NAME} ${KUBECTL_CMD_PARAMS} -o json 2>/dev/null)
 
 # Check if the resource exists
 if [[ $? -ne 0 ]]; then
     echo "Error: ${RESOURCE_TYPE} ${RESOURCE_NAME} not found."
     exit 1
+fi
+
+if [[ "$RESOURCE_TYPE" == "secret" || "$RESOURCE_TYPE" == "secrets" ]]; then
+  if [[ "$SECRET_NO_DECODE" == "false" ]]; then
+    RESOURCE_JSON=$(echo "$RESOURCE_JSON" | jq --arg key "$SECRET_DATA_KEY" --argjson data_only "$([[ "$SECRET_DATA_ONLY" == "true" ]] && echo true || echo false)" '
+      def decode_data(data; key):
+        if key == "" then
+          data | with_entries(.value |= @base64d)
+        else
+          if data[key] then { (key): (data[key] | @base64d) }
+          else error("Key \($key) not found in secret")
+          end
+        end;
+
+      .data = decode_data(.data; $key)
+      | if $data_only then .data
+        else {
+          apiVersion,
+          kind,
+          type,
+          metadata,
+          data: .data
+        }
+      end
+    ')
+  fi
 fi
 
 # Output the result as JSON or YAML
