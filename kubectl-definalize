@@ -17,7 +17,7 @@ usage() {
 POSITIONAL_ARGS=()
 
 # Parse arguments
-RESOURCE_TYPE="all"
+RESOURCE_TYPE=""
 RESOURCE_NAME=""
 CONTEXT=""
 NAMESPACE=""
@@ -66,8 +66,14 @@ set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 RESOURCE_TYPE=$(echo "$1" | tr '[:upper:]' '[:lower:]')
 RESOURCE_NAME=$(echo "$2" | tr '[:upper:]' '[:lower:]')
 
+if echo "$RESOURCE_TYPE" | grep '/'; then
+  RESOURCE_TYPE=$(echo "$RESOURCE_TYPE" | cut -d '/' -f 1)
+  RESOURCE_NAME=$(echo "$RESOURCE_TYPE" | cut -d '/' -f 2)
+fi
+
 if [[ -z "$RESOURCE_TYPE" ]] || [[ -z "$RESOURCE_NAME" ]]; then
   usage
+  exit 1
 fi
 
 # Build kubectl command with optional arguments
@@ -76,6 +82,10 @@ KUBECTL_CMD="kubectl"
 [[ -n "$NAMESPACE" ]] && KUBECTL_CMD="$KUBECTL_CMD --namespace=$NAMESPACE"
 [[ -n "$LABEL_SELECTOR" ]] && KUBECTL_CMD="$KUBECTL_CMD --selector=$LABEL_SELECTOR"
 
-${KUBECTL_CMD} patch ${RESOURCE_TYPE} ${RESOURCE_NAME} -p '{"metadata": {"finalizers": null}}' --type=merge
+if [[ "$RESOURCE_TYPE" == "ns" || "$RESOURCE_TYPE" == "namespaces" ]]; then
+  ${KUBECTL_CMD} patch ${RESOURCE_TYPE} ${RESOURCE_NAME} -p '{"spec": {"finalizers": null}}' --type=merge
+else
+  ${KUBECTL_CMD} patch ${RESOURCE_TYPE} ${RESOURCE_NAME} -p '{"metadata": {"finalizers": null}}' --type=merge
+fi
 
 
