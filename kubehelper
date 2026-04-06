@@ -1,0 +1,23 @@
+#!/bin/sh
+
+SCRIPT_NAME=$(basename $0)
+
+KUBECTL_CMD="kubectl"
+if [[ $(command -V kubecolor >/dev/null 2>&1 || echo $?) -eq 0 ]]; then
+  KUBECTL_CMD="kubecolor"
+fi
+
+case "$SCRIPT_NAME" in
+  kdesc)
+    ${KUBECTL_CMD} describe "$@"
+    ;;
+  kpf)
+    ${KUBECTL_CMD} port-forward "$@"
+    ;;
+  klogs|klog)
+    ${KUBECTL_CMD} logs "$@"
+    ;;
+  *)
+    ${KUBECTL_CMD} "$@"
+    ;;
+esac
