@@ -30,6 +30,13 @@ function kubectl_nodes_allocatable() {
           "unknown"
         end
       ),
+      arch: (
+        if $meta.labels."kubernetes.io/arch" != null then
+          $meta.labels."kubernetes.io/arch"
+        else
+          "unknown"
+        end
+      ),
       provisioner: (
         if $meta.labels."karpenter.sh/nodepool" != null then
           "Karpenter"
@@ -55,10 +62,10 @@ function kubectl_nodes_allocatable() {
         | length
       )
     }
-    | "\(.name)§\(.provisioner)/\(.groupname)§\(.instance_type)§\(.allocatable)§\(.running)"
+    | "\(.name)§\(.provisioner)/\(.groupname)§\(.instance_type)§\(.arch)§\(.allocatable)§\(.running)"
   ' | sed '1i\
-NAME§PROVISIONER/GROUPNAME§INSTANCE_TYPE§TOTAL§RUNNING\
-----§---------------------§-------------§-----§-------\
+NAME§PROVISIONER/GROUPNAME§INSTANCE_TYPE§ARCH§TOTAL§RUNNING\
+----§---------------------§-------------§-----§-----§-------\
 ' | column -t -s '§'
 }
 
@@ -123,6 +130,13 @@ function kubectl_nodes_resources() {
           "unknown"
         end
       ),
+      arch: (
+        if $meta.labels."kubernetes.io/arch" != null then
+          $meta.labels."kubernetes.io/arch"
+        else
+          "unknown"
+        end
+      ),
       provisioner: (
         if $meta.labels."karpenter.sh/nodepool" != null then
           "Karpenter"
@@ -154,10 +168,10 @@ function kubectl_nodes_resources() {
       req_mem_pct: (pct_1dec(( $pods | map(pod_sum_mem_requests) | add // 0 ); (.status.allocatable.memory | mem_bytes))),
       lim_mem_pct: (pct_1dec(( $pods | map(pod_sum_mem_limits) | add // 0 ); (.status.allocatable.memory | mem_bytes)))
     }
-    | "\(.name)§\(.provisioner)/\(.groupname)§\(.instance_type)§\(.req_cpu_m)§\(.lim_cpu_m)§\(.req_mem_gi)§\(.lim_mem_gi)§\(.req_cpu_pct)%§\(.lim_cpu_pct)%§\(.req_mem_pct)%§\(.lim_mem_pct)%"
+    | "\(.name)§\(.provisioner)/\(.groupname)§\(.instance_type)§\(.arch)§\(.req_cpu_m)§\(.lim_cpu_m)§\(.req_mem_gi)§\(.lim_mem_gi)§\(.req_cpu_pct)%§\(.lim_cpu_pct)%§\(.req_mem_pct)%§\(.lim_mem_pct)%"
   ' | sed '1i\
-NAME§PROVISIONER/GROUPNAME§INSTANCE_TYPE§REQ_CPU(m)§LIM_CPU(m)§REQ_MEM(Gi)§LIM_MEM(Gi)§REQ_CPU(%)§LIM_CPU(%)§REQ_MEM(%)§LIM_MEM(%)\
-----§---------------------§-------------§----------§----------§-----------§-----------§----------§----------§----------§----------\
+NAME§PROVISIONER/GROUPNAME§INSTANCE_TYPE§ARCH§REQ_CPU(m)§LIM_CPU(m)§REQ_MEM(Gi)§LIM_MEM(Gi)§REQ_CPU(%)§LIM_CPU(%)§REQ_MEM(%)§LIM_MEM(%)\
+----§---------------------§-------------§-----§----------§----------§-----------§-----------§----------§----------§----------§----------\
 ' | column -t -s '§'
 }
 
@@ -192,6 +206,13 @@ function kubectl_nodes_types() {
           $meta.labels."node.kubernetes.io/instance-type"
         elif $meta.labels."beta.kubernetes.io/instance-type" != null then
           $meta.labels."beta.kubernetes.io/instance-type"
+        else
+          "unknown"
+        end
+      ),
+      arch: (
+        if $meta.labels."kubernetes.io/arch" != null then
+          $meta.labels."kubernetes.io/arch"
         else
           "unknown"
         end
@@ -234,11 +255,11 @@ function kubectl_nodes_types() {
     .status = (if .ready == "True" then "Ready" else "NotReady" end) |
 
     # Format string with separator §
-    "\(.name)§\(.status)§\(.age)§\(.ip)§\(.version)§\(.provisioner)/\(.groupname)§\(.instance_type)§\(.az)"
+    "\(.name)§\(.status)§\(.age)§\(.ip)§\(.version)§\(.provisioner)/\(.groupname)§\(.instance_type)§\(.arch)§\(.az)"
 EOF
   )" | sed '1i\
-NAME§STATUS§AGE§IP§VERSION§PROVISIONER/GROUPNAME§INSTANCE_TYPE§AZ\
-----§------§---§--§-------§---------------------§-------------§--\
+NAME§STATUS§AGE§IP§VERSION§PROVISIONER/GROUPNAME§INSTANCE_TYPE§ARCH§AZ\
+----§------§---§--§-------§---------------------§-------------§-----§--\
 ' | sed 's/NotReady/  🔴/g' | sed 's/Ready/  🟢/g' | column -t -s '§'
 }
 
